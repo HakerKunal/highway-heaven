@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { getMenu, saveMenu, persistent, type Dish, CATEGORIES } from "@/lib/store";
 import { isAuthed } from "@/lib/auth";
+import { onlinePaymentsEnabled } from "@/lib/razorpay";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const menu = await getMenu();
-  return NextResponse.json({ menu, categories: CATEGORIES });
+  return NextResponse.json({ menu, categories: CATEGORIES, onlinePayments: onlinePaymentsEnabled });
 }
 
 // Admin: add a dish

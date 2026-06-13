@@ -13,6 +13,7 @@ type Cart = Record<string, number>;
 export default function Home() {
   const router = useRouter();
   const [menu, setMenu] = useState<Dish[]>([]);
+  const [onlinePay, setOnlinePay] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [cart, setCart] = useState<Cart>({});
@@ -29,6 +30,7 @@ export default function Home() {
       .then((r) => r.json())
       .then((d) => {
         setMenu(d.menu || []);
+        setOnlinePay(!!d.onlinePayments);
         const cats: string[] = d.categories || [];
         const present = cats.filter((c: string) => (d.menu || []).some((m: Dish) => m.category === c));
         const extra = Array.from(new Set((d.menu || []).map((m: Dish) => m.category))).filter(
@@ -107,10 +109,74 @@ export default function Home() {
     });
   }, []);
 
+  function finishOrder(orderId: string) {
+    setCart({});
+    try {
+      window.localStorage.removeItem("hh-cart");
+      const past = JSON.parse(window.localStorage.getItem("hh-orders") || "[]");
+      window.localStorage.setItem("hh-orders", JSON.stringify([orderId, ...past].slice(0, 10)));
+    } catch {}
+    router.push(`/order/${orderId}`);
+  }
+
+  function loadRazorpayScript(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if ((window as any).Razorpay) return resolve();
+      const s = document.createElement("script");
+      s.src = "https://checkout.razorpay.com/v1/checkout.js";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("Could not load the payment window. Check your connection and try again."));
+      document.body.appendChild(s);
+    });
+  }
+
+  function openRazorpay(order: any, rzp: { keyId: string; orderId: string; amount: number }) {
+    const r = new (window as any).Razorpay({
+      key: rzp.keyId,
+      amount: rzp.amount,
+      currency: "INR",
+      name: "Highway Heaven",
+      description: `Order ${order.id}`,
+      order_id: rzp.orderId,
+      prefill: { name: form.name, contact: form.phone },
+      theme: { color: "#DCA73F" },
+      handler: async (resp: any) => {
+        try {
+          const v = await fetch("/api/payment/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ orderId: order.id, ...resp }),
+          });
+          const vd = await v.json();
+          if (!v.ok) throw new Error(vd.error || "Payment verification failed");
+          finishOrder(order.id);
+        } catch (e: any) {
+          setError(e.message + " — if money was deducted, call us with your order ID " + order.id + ".");
+          setPlacing(false);
+        }
+      },
+      modal: {
+        ondismiss: () => {
+          setError("Payment was not completed, so your order isn't confirmed yet. Tap the button to try paying again, or switch to cash/UPI on delivery.");
+          setPlacing(false);
+        },
+      },
+    });
+    r.open();
+  }
+
+  // If an online order was created but payment was abandoned, retry pays for the SAME order (no duplicates).
+  const [pendingPay, setPendingPay] = useState<{ order: any; razorpay: any } | null>(null);
+
   async function placeOrder() {
     setError("");
     setPlacing(true);
     try {
+      if (form.payment === "online" && pendingPay) {
+        await loadRazorpayScript();
+        openRazorpay(pendingPay.order, pendingPay.razorpay);
+        return;
+      }
       const res = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -118,13 +184,13 @@ export default function Home() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not place the order. Please try again.");
-      setCart({});
-      try {
-        window.localStorage.removeItem("hh-cart");
-        const past = JSON.parse(window.localStorage.getItem("hh-orders") || "[]");
-        window.localStorage.setItem("hh-orders", JSON.stringify([data.order.id, ...past].slice(0, 10)));
-      } catch {}
-      router.push(`/order/${data.order.id}`);
+      if (data.razorpay) {
+        setPendingPay({ order: data.order, razorpay: data.razorpay });
+        await loadRazorpayScript();
+        openRazorpay(data.order, data.razorpay);
+        return;
+      }
+      finishOrder(data.order.id);
     } catch (e: any) {
       setError(e.message);
       setPlacing(false);
@@ -446,14 +512,15 @@ export default function Home() {
                     />
                   </Field>
                   <Field label="Payment">
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className={`grid gap-2 ${onlinePay ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-2"}`}>
                       {[
+                        ...(onlinePay ? [{ v: "online", t: "Pay now — UPI / Card" }] : []),
                         { v: "cod", t: form.fulfilment === "pickup" ? "Cash at counter" : "Cash on delivery" },
                         { v: "upi", t: form.fulfilment === "pickup" ? "UPI at counter" : "UPI on delivery" },
                       ].map((p) => (
                         <button
                           key={p.v}
-                          onClick={() => setForm({ ...form, payment: p.v })}
+                          onClick={() => { setForm({ ...form, payment: p.v }); if (p.v !== "online") setPendingPay(null); }}
                           className={`rounded-lg border px-3 py-2.5 font-sign text-sm font-semibold uppercase tracking-wide transition ${
                             form.payment === p.v
                               ? "border-gold bg-gold text-asphalt"
@@ -491,7 +558,13 @@ export default function Home() {
                   disabled={placing}
                   className="mt-4 w-full rounded-xl bg-gold py-3.5 font-sign text-base font-bold uppercase tracking-wider text-asphalt transition hover:bg-cream disabled:opacity-60"
                 >
-                  {placing ? "Placing your order…" : checkout ? `Place order • ₹${subtotal + delivery}` : "Checkout →"}
+                  {placing
+                    ? form.payment === "online" ? "Opening payment…" : "Placing your order…"
+                    : checkout
+                    ? form.payment === "online"
+                      ? `Pay ₹${subtotal + delivery} & place order`
+                      : `Place order • ₹${subtotal + delivery}`
+                    : "Checkout →"}
                 </button>
               </div>
             )}

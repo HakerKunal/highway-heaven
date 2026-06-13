@@ -30,7 +30,9 @@ export type Order = {
   phone: string;
   address: string;
   note?: string;
-  payment: "cod" | "upi";
+  payment: "cod" | "upi" | "online";
+  paymentStatus?: "pending" | "paid";
+  razorpayOrderId?: string;
   status: OrderStatus;
   createdAt: number;
   updatedAt: number;

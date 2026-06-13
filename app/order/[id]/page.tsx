@@ -173,6 +173,20 @@ export default function OrderPage({ params }: { params: { id: string } }) {
               </div>
             )}
 
+            {order.payment === "online" && (
+              <div className={`mt-10 rounded-xl border p-4 text-center ${order.paymentStatus === "paid" ? "border-signgreen bg-signgreen/15" : "border-wine bg-wine/15"}`}>
+                <p className="font-sign font-bold uppercase tracking-wider text-cream">
+                  {order.paymentStatus === "paid" ? "✅ Payment received — order confirmed" : "⚠️ Payment pending"}
+                </p>
+                {order.paymentStatus !== "paid" && (
+                  <p className="mt-1 text-sm text-mist">
+                    We haven't received payment for this order yet. If money was deducted, call us at{" "}
+                    <a className="text-gold" href="tel:+918318917038">+91 83189 17038</a> with your order ID.
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* ---- bill ---- */}
             <div className="mt-12 rounded-xl border border-cream/10 bg-tar p-5">
               <h2 className="font-display text-lg font-bold text-gold">Your bill</h2>
@@ -199,7 +213,9 @@ export default function OrderPage({ params }: { params: { id: string } }) {
                 <div className="flex justify-between font-sign text-lg font-bold text-gold">
                   <span>
                     Total (
-                    {isPickup
+                    {order.payment === "online"
+                      ? order.paymentStatus === "paid" ? "Paid online" : "Online — pending"
+                      : isPickup
                       ? order.payment === "upi" ? "UPI at counter" : "Cash at counter"
                       : order.payment === "upi" ? "UPI on delivery" : "Cash on delivery"}
                     )

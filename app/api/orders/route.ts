@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getMenu, getOrders, saveOrders, newOrderId, persistent, type Order, type OrderItem, type Fulfilment } from "@/lib/store";
 import { isAuthed } from "@/lib/auth";
+import { onlinePaymentsEnabled, razorpayKeyId, createRazorpayOrder } from "@/lib/razorpay";
+import { notifyOwner } from "@/lib/notify";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +15,8 @@ export async function POST(req: Request) {
   const phone = String(body.phone || "").replace(/\D/g, "");
   const address = String(body.address || "").trim();
   const note = String(body.note || "").trim();
-  const payment = body.payment === "upi" ? "upi" : "cod";
+  const payment: "cod" | "upi" | "online" =
+    body.payment === "online" && onlinePaymentsEnabled ? "online" : body.payment === "upi" ? "upi" : "cod";
   const fulfilment: Fulfilment = body.fulfilment === "pickup" ? "pickup" : "delivery";
   const cart: Record<string, number> = body.cart && typeof body.cart === "object" ? body.cart : {};
 
@@ -47,15 +50,36 @@ export async function POST(req: Request) {
     address: fulfilment === "pickup" ? "Pickup from restaurant" : address,
     note: note || undefined,
     payment,
+    paymentStatus: payment === "online" ? "pending" : undefined,
     status: "placed",
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
 
+  // For online payment: create the Razorpay order first; confirmation happens after payment is verified.
+  let razorpay: { keyId: string; orderId: string; amount: number } | undefined;
+  if (payment === "online") {
+    try {
+      const rzpOrderId = await createRazorpayOrder(order.total, order.id);
+      order.razorpayOrderId = rzpOrderId;
+      razorpay = { keyId: razorpayKeyId, orderId: rzpOrderId, amount: order.total * 100 };
+    } catch (e) {
+      console.error(e);
+      return NextResponse.json(
+        { error: "Online payment is unavailable right now. Please choose cash or UPI on delivery." },
+        { status: 502 }
+      );
+    }
+  }
+
   const orders = await getOrders();
   orders.push(order);
   await saveOrders(orders);
-  return NextResponse.json({ order });
+
+  // Notify the owner immediately for pay-later orders; online orders notify after payment succeeds.
+  if (payment !== "online") notifyOwner(order, "🆕 New order").catch(() => {});
+
+  return NextResponse.json({ order, razorpay });
 }
 
 // Admin: list all orders

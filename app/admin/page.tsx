@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Dish, Order, OrderStatus } from "@/lib/store";
 
@@ -19,6 +19,11 @@ const PICKUP_STATUS_LABEL: Record<OrderStatus, string> = {
 };
 const labelFor = (o: Order, s: OrderStatus) =>
   (o.fulfilment === "pickup" ? PICKUP_STATUS_LABEL : STATUS_LABEL)[s];
+
+function payText(o: Order): string {
+  if (o.payment === "online") return o.paymentStatus === "paid" ? "PAID ONLINE" : "ONLINE — UNPAID";
+  return (o.payment === "upi" ? "UPI" : "Cash") + (o.fulfilment === "pickup" ? " at counter" : " on delivery");
+}
 const NEXT: Partial<Record<OrderStatus, OrderStatus>> = {
   placed: "confirmed",
   confirmed: "preparing",
@@ -172,6 +177,28 @@ function Dashboard({ token, onAuthFail }: { token: string; onAuthFail: () => voi
 
   const newCount = orders.filter((o) => o.status === "placed").length;
 
+  // Ping a sound when a brand-new order arrives (after the first load).
+  const prevCount = useRef<number | null>(null);
+  useEffect(() => {
+    if (prevCount.current !== null && newCount > prevCount.current) {
+      try {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.frequency.value = 880;
+        o.type = "sine";
+        g.gain.setValueAtTime(0.001, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.05);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+        o.start();
+        o.stop(ctx.currentTime + 0.6);
+      } catch {}
+    }
+    prevCount.current = newCount;
+  }, [newCount]);
+
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
       {!persistent && (
@@ -256,10 +283,19 @@ function OrdersBoard({
                 >
                   {o.fulfilment === "pickup" ? "🥡 Pickup" : "🛵 Delivery"}
                 </span>
+                {o.payment === "online" && (
+                  <span
+                    className={`ml-2 rounded px-2 py-0.5 align-middle font-sign text-[0.65rem] font-bold uppercase tracking-wider ${
+                      o.paymentStatus === "paid" ? "bg-signgreen text-cream" : "bg-wine text-cream"
+                    }`}
+                  >
+                    {o.paymentStatus === "paid" ? "✅ Paid" : "Unpaid"}
+                  </span>
+                )}
               </p>
               <p className="text-xs text-mist">
                 {new Date(o.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })} •{" "}
-                {o.payment === "upi" ? "UPI" : "Cash"} {o.fulfilment === "pickup" ? "at counter" : "on delivery"}
+                {payText(o)}
               </p>
             </div>
             <span
